@@ -189,10 +189,9 @@ def calcular_sha1(mensaje: str) -> str:
 
 
 MENU = """
-==============================================
-        SHA-1 PERSONALIZADO  (por bloques)
-   Variante experimental, NO es el SHA-1 estándar
-==============================================
+============================================================
+        SHA PERSONALIZADO  Sebas ProMax (Basado en SHA-1)
+============================================================
   1. Calcular el SHA-1 Personalizado de un mensaje
   2. Ver las palabras W0 a W79 (primero 16, luego hasta 80)
   3. Ver los 4 bloques de rondas (información completa)
