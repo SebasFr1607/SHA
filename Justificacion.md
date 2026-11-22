@@ -1,6 +1,6 @@
 # Justificación matemática 
 
-
+---
 ## 1. Qué es lo que se está modificando
 
 SHA-1 toma un mensaje, lo parte en bloques de 512 bits y por cada bloque hace dos cosas:
@@ -223,11 +223,3 @@ Cada ronda es reversible sin importar qué $F$ se use. Lo que hace irreversible 
 | Resultado | 160 bits | 160 bits (40 hex) |
 
 ---
-
-## 8. Limitaciones y conclusión
-
-- **Más operaciones no significa más seguridad.** Hay más compuertas, pero eso es cantidad de cálculo, no resistencia comprobada.
-- **No se hicieron** análisis diferencial, lineal, de colisiones ni de preimágenes. Sin ellos no se puede decir que la variante sea más segura ni más débil que SHA-1.
-- **Ejemplo de por qué hay que comprobar:** la primera expansión parecía "más compleja" y en realidad colapsaba a ceros; y dos candidatas de $F$ resultaron duplicada y casi lineal.
-- **La avalancha medida** (cambiar un carácter cambia en promedio 80.26 de 160 bits, sobre 50 pares) es solo una observación, no una prueba.
-- **Uso:** variante académica y experimental; no usar en aplicaciones reales.
