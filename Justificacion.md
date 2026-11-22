@@ -1,169 +1,233 @@
-# Justificación matemática — SHA-1 Personalizado (versión corregida)
+# Justificación matemática 
 
-> **Estado:** variante experimental con fines académicos. **No es SHA-1 estándar** y no se afirma que mejore su seguridad. Los datos numéricos de este documento provienen de ejecuciones reales de `SHA1_Personalizado.py` y de las comprobaciones de tablas de verdad realizadas con un script auxiliar (no se usó ninguna biblioteca para calcular hashes).
+
+## 1. Qué es lo que se está modificando
+
+SHA-1 toma un mensaje, lo parte en bloques de 512 bits y por cada bloque hace dos cosas:
+
+1. **Expansión:** convierte 16 palabras (números de 32 bits) en 80 palabras: $W_0,\dots,W_{79}$.
+2. **80 rondas:** con cinco registros $A,B,C,D,E$ calcula en cada ronda
+$$TEMP=\big(\mathrm{ROTL}^5(A)+F(B,C,D)+E+W_t+K_t\big)\bmod 2^{32}$$
+
+Solo se tocan **dos piezas**: la fórmula de las palabras $W_{16}$ a $W_{79}$ y la función $F$ de cada grupo de 20 rondas. La fórmula de $TEMP$, los registros, las constantes y las sumas finales no cambian.
 
 ---
 
-## 1. Expansión de palabras W16–W79
+## 2. Las operaciones, explicadas con bits
 
-### 1.1. Fórmula original y fórmula implementada
+Una palabra son 32 bits (ceros y unos). Cada operación trabaja **columna por columna**:
 
-$$\text{Original:}\quad W_t=\mathrm{ROTL}^1(X),\qquad X=W_{t-3}\oplus W_{t-8}\oplus W_{t-14}\oplus W_{t-16}$$
+| Operación | Símbolo | Regla (por cada bit) | Idea sencilla |
+|---|---|---|---|
+| AND | $\wedge$ | 1 solo si **ambos** son 1 | "los dos tienen que estar de acuerdo" |
+| OR | $\vee$ | 1 si **alguno** es 1 | "con que uno baste" |
+| XOR | $\oplus$ | 1 si son **distintos** | "detecta diferencias" |
+| NOT | $\neg$ | invierte el bit | "al revés" |
+| ROTL$^n$ | | mueve los bits $n$ lugares a la izquierda; los que salen entran por la derecha | "girar la fila de bits" |
 
-$$\boxed{\text{Implementada:}\quad W_t=\mathrm{ROTL}^1(X)\;\oplus\;(W_{t-1}\wedge W_{t-2}),\qquad 16\le t\le 79}$$
+**Nota sobre Python:** el NOT de Python da números negativos. Por eso cada NOT se escribe `(~x) & 0xFFFFFFFF`, que lo deja en 32 bits.
 
-Orden de cálculo en el código: (1) $X$; (2) $\mathrm{ROTL}^1(X)$; (3) $W_{t-1}\wedge W_{t-2}$; (4) XOR de ambos, enmascarado con `MASCARA_32`.
+### El campo GF(2): por qué XOR es "lineal" y AND no
 
-### 1.2. Qué problema provocaba el AND aplicado como filtro
+$GF(2)$ es el mundo donde solo existen 0 y 1, y donde la suma es XOR y la multiplicación es AND:
 
-La versión anterior usaba $W_t=\mathrm{ROTL}^1(X\wedge W_{t-1})$. En cada posición de bit $j$:
+$$0+0=0,\quad 0+1=1,\quad 1+1=0 \qquad\text{(suma = XOR)}$$
+$$0\cdot0=0,\quad 0\cdot1=0,\quad 1\cdot1=1 \qquad\text{(producto = AND)}$$
 
-$$w_{t,j}=x_{j}\cdot w_{t-1,j}\;(\text{tras rotar}).$$
+Con esto, cualquier función de bits se escribe como un polinomio. Por ejemplo $B\oplus C\oplus D$ es $B+C+D$.
 
-Si $x$ y $w_{t-1}$ fueran bits uniformes independientes, $P(w_{t,j}=1)=\tfrac12\cdot\delta_{t-1}$, donde $\delta_{t-1}$ es la densidad de unos de $W_{t-1}$. Por tanto $\delta_t\approx\tfrac12\delta_{t-1}$: **decaimiento geométrico**. Además, si $W_{t-1}=0$ entonces $W_t=0$, y por inducción todas las palabras posteriores son 0 (**el cero es absorbente**).
+- **Lineal:** solo hay sumas de variables sueltas ($B+C+D$). Cada bit de entrada influye por su cuenta, sin "interactuar" con los demás. Esto se puede resolver como un sistema de ecuaciones.
+- **No lineal:** aparecen **productos** como $BC$ o $CD$. Ahora el resultado depende de **combinaciones** de bits.
 
-Medición real de aquella versión (20 000 bloques aleatorios): ≈ 4.35 palabras no nulas de las 64 (W16–W79); con mensaje vacío, 0 de 64.
+AND es un producto ($BC$), así que introduce no linealidad. OR también: $B\vee C=B\oplus C\oplus BC$, lleva el producto escondido. NOT es solo "sumar 1", y rotar solo reordena columnas, así que ni NOT ni ROTL agregan no linealidad por sí solos.
 
-Hay además una pérdida de información explícita: en las posiciones donde $W_{t-1}$ vale 0, el valor de $X$ se destruye, y la recurrencia ya no se puede revertir.
+---
 
-### 1.3. Por qué la fórmula corregida evita el colapso
+## 3. La expansión de palabras (W16 a W79)
 
-Se conserva íntegra la contribución lineal de SHA-1 ($\mathrm{ROTL}^1(X)$) y el AND entra como **término aditivo**:
+### 3.1. Las dos fórmulas
 
-- **No hay filtrado.** El término $W_{t-1}\wedge W_{t-2}$ se suma por XOR; no multiplica a $X$. Si $W_{t-1}=0$ o $W_{t-2}=0$, el término adicional vale 0 y queda $W_t=\mathrm{ROTL}^1(X)$, que sigue llevando información.
-- **El cero no es absorbente.** Para que $W_t=0$ se necesita $\mathrm{ROTL}^1(X)=W_{t-1}\wedge W_{t-2}$, una coincidencia que depende de cuatro palabras previas, no de una sola.
-- **Densidad estable.** Si $\mathrm{ROTL}^1(X)$ es uniforme e independiente del término AND, su XOR también es uniforme, con independencia de la densidad del AND ($u\oplus v$ es uniforme si $u$ lo es). Esto es un argumento heurístico; se contrasta con la medición.
-- **La recurrencia es reversible.** Se puede despejar $W_{t-16}$:
-$$W_{t-16}=\mathrm{ROTL}^{31}\big(W_t\oplus(W_{t-1}\wedge W_{t-2})\big)\oplus W_{t-3}\oplus W_{t-8}\oplus W_{t-14}.$$
-La ventana $(W_{t-16},\dots,W_{t-1})\mapsto(W_{t-15},\dots,W_t)$ es una biyección. Se verificó con 5 000 casos aleatorios (recuperación exacta de $W_{t-16}$).
+Sea $X=W_{t-3}\oplus W_{t-8}\oplus W_{t-14}\oplus W_{t-16}$.
 
-### 1.4. Por qué combinar con XOR y no con otra compuerta
+- **SHA-1 original:** $W_t=\mathrm{ROTL}^1(X)$
+- **Primera versión (con problemas):** $W_t=\mathrm{ROTL}^1(X\wedge W_{t-1})$
+- **Versión final:** $\boxed{W_t=\mathrm{ROTL}^1(X)\oplus(W_{t-1}\wedge W_{t-2})}$
 
-| Combinación | Comportamiento |
+### 3.2. Qué significa cada variable
+
+| Símbolo | Qué es |
 |---|---|
-| `AND` (anterior) | Filtra, reduce densidad, cero absorbente, no reversible |
-| `OR` | Sesga hacia 1 (densidad $\to$ 1 en cascada) |
-| `XOR` | Preserva la densidad uniforme y la reversibilidad; añade un monomio de grado 2 |
+| $t$ | posición de la palabra que se está calculando (de 16 a 79) |
+| $W_{t-3},W_{t-8},W_{t-14},W_{t-16}$ | cuatro palabras anteriores que la expansión original mezcla |
+| $X$ | el XOR de esas cuatro: la mezcla original |
+| $\mathrm{ROTL}^1(X)$ | $X$ girado un bit |
+| $W_{t-1},W_{t-2}$ | las dos palabras inmediatamente anteriores |
+| $W_{t-1}\wedge W_{t-2}$ | 1 solo donde las dos tienen 1: **el término nuevo** |
 
-### 1.5. Resultados medidos (5 000 bloques aleatorios)
+### 3.3. Por qué la primera versión fallaba
 
-| Medida | Anterior | Corregida |
-|---|---|---|
-| Densidad de unos en W16, W17, W20, W32, W48, W79 | 0.25, 0.13, 0.016, ≈0, 0, 0 | 0.499, 0.500, 0.500, 0.500, 0.500, 0.500 |
-| Palabras nulas en W16–W79 | 100 % de los bloques con colapso | 0 de 320 000 |
+Pensemos el AND como una **rejilla**: $X\wedge W_{t-1}$ deja pasar un bit de $X$ solo donde $W_{t-1}$ tiene 1. Si los bits son aleatorios (la mitad unos), tras el AND queda la **mitad de los unos** que tenía $W_{t-1}$:
 
-Casos especiales: cadena vacía → 52 de 64 palabras no nulas (los ceros son legítimos: solo hay un bit significativo de partida y el relleno), sin colapso en cascada; mensajes con entrada densa → 64/64.
+$$\text{densidad}(W_t)\approx\tfrac12\cdot\text{densidad}(W_{t-1})$$
 
-> La variante es experimental. Que la densidad se mantenga en 0.5 no demuestra seguridad.
+Cada palabra tiene la mitad de unos que la anterior: 0.5, 0.25, 0.125, 0.06… hasta quedarse en ceros. Peor aún, si $W_{t-1}=0$ entonces $W_t=0$, y también la siguiente, y así **para siempre** (el cero "contagia").
 
----
+Medido con el programa (20 000 bloques aleatorios): solo ≈ 4.35 palabras no nulas de las 64; con mensaje vacío, 0 de 64. Además se **perdía información**: donde $W_{t-1}$ tenía 0, el contenido de $X$ se borraba.
 
-## 2. Las cuatro funciones booleanas
+### 3.4. Por qué la versión final funciona
 
-### 2.1. Funciones base (conservadas de tu código)
+Aquí el AND ya no es una rejilla, sino un **ingrediente que se suma** (por XOR):
 
-$$F_1=(B\wedge C)\vee(\neg B\wedge D),\quad F_2=B\oplus C\oplus D,\quad F_3=(B\wedge C)\vee(B\wedge D)\vee(C\wedge D),\quad F_4=B\oplus C\oplus D$$
+1. **La mezcla original queda completa.** $\mathrm{ROTL}^1(X)$ sigue ahí sin filtrar.
+2. **El cero no se contagia.** Si $W_{t-1}=0$, el término extra vale 0 y queda $W_t=\mathrm{ROTL}^1(X)$, que sigue teniendo información.
+3. **La densidad no cae.** XOR con un término independiente mantiene la mitad de unos (idea: $u\oplus v$ es uniforme si $u$ lo es). Medido: densidad ≈ 0.50 en todas las posiciones, y **0 palabras nulas de 320 000** en bloques aleatorios.
+4. **No se pierde información.** La recurrencia se puede revertir: despejando,
+$$W_{t-16}=\mathrm{ROTL}^{31}\big(W_t\oplus(W_{t-1}\wedge W_{t-2})\big)\oplus W_{t-3}\oplus W_{t-8}\oplus W_{t-14}.$$
+Se comprobó en 5 000 casos aleatorios.
 
-Las fórmulas base de F2 y F4 **coinciden ahora con las del código original** (en la versión anterior se habían sustituido por otras).
+**¿Por qué XOR y no OR u otra compuerta?**
 
-### 2.2. Comprobaciones de las candidatas propuestas
+| Para combinar | Resultado |
+|---|---|
+| AND (versión anterior) | filtra, vacía de unos, cero contagia |
+| OR | tiende a llenar de unos |
+| **XOR** | mantiene el equilibrio y no pierde información |
 
-Se aplicaron los siete controles pedidos: tabla de verdad, dependencia de B, C y D, simplificación algebraica (ANF), no linealidad, conteo de unos y ceros, sesgo, equivalencia con funciones más simples.
+### 3.5. Qué cambia matemáticamente
 
-| Candidata | Tabla (BCD=000…111) | Unos | Depende de | ANF | No linealidad | Veredicto |
-|---|---|---|---|---|---|---|
-| $F_1'=\text{Choose}\oplus(B\vee C)$ | 01101100 | 4 | B, C, D | $B\oplus C\oplus D\oplus BD$ | 2 | Correcta, **pero idéntica a la candidata de F2** |
-| $F_2'=(B\oplus C\oplus D)\oplus(B\wedge D)$ | 01101100 | 4 | B, C, D | $B\oplus C\oplus D\oplus BD$ | 2 | **Duplica a F1'** |
-| $F_3'=\text{Maj}\oplus[(B\vee C)\wedge\neg D]$ | 00111101 | 5 | B, C, D | $B\oplus C\oplus BCD$ | **1** | **Casi afín** (a distancia 1 de $B\oplus C$) y sesgada |
-| $F_4'=(B\oplus C\oplus D)\oplus(B\wedge C)$ | 01101010 | 4 | B, C, D | $B\oplus C\oplus D\oplus BC$ | 2 | Correcta |
+- Antes la expansión era **lineal** en $GF(2)$ (solo XOR y giros). Ahora tiene un término de **grado 2** ($W_{t-1}\cdot W_{t-2}$): es no lineal.
+- Cada palabra depende de **6** palabras anteriores en vez de 4: $t-1,t-2,t-3,t-8,t-14,t-16$.
+- Como cada $W_t$ se usa para calcular las siguientes, el término AND se propaga: un cambio en una palabra afecta a más palabras posteriores.
 
-(Nota: no linealidad = distancia de Hamming mínima a una función afín; el máximo posible para 3 variables es 2.)
+### 3.6. Ejemplo real con "Hola mundo" (bloque 1)
 
-**Problemas detectados:**
+Para $t=16$: $W_{13}=0$, $W_8=0$, $W_2=\texttt{646F8000}$, $W_0=\texttt{486F6C61}$.
 
-1. $F_1'$ y $F_2'$ candidatas son **la misma función**, de modo que dos de los cuatro bloques usarían exactamente la misma tabla.
-2. $F_3'$ candidata tiene no linealidad 1 (la más baja posible sin ser afín) y 5 de 8 unos.
+| Paso | Valor |
+|---|---|
+| $X=W_{13}\oplus W_8\oplus W_2\oplus W_0$ | `2C00EC61` |
+| $\mathrm{ROTL}^1(X)$ | `5801D8C2` |
+| $W_{15}\wedge W_{14}$ (ver nota) | `00000000` |
+| $W_{16}=\mathrm{ROTL}^1(X)\oplus\text{AND}$ | **`5801D8C2`** |
 
-### 2.3. Alternativas adoptadas y justificación
-
-Para F1 se probó la modificación `Choose ⊕ (x ∨ y)` con los tres pares posibles: solo $B\vee C$ da una función balanceada que depende de las tres variables (los otros dos pares dan 2 unos de 8); por eso **F1' se mantiene**. Para F2 existen tres modificaciones con AND, todas con 4 unos y no linealidad 2, y se eligió la que evita el duplicado. Para F3 se buscaron términos con OR/AND (con literales negados) que den función balanceada, no linealidad 2, dependiente de B, C y D, y distinta de las otras tres y de sus complementos.
-
-| Función | Fórmula definitiva | Cambio |
-|---|---|---|
-| $F_1'$ | $\big[(B\wedge C)\vee(\neg B\wedge D)\big]\oplus(B\vee C)$ | Sin cambio |
-| $F_2'$ | $(B\oplus C\oplus D)\oplus(C\wedge D)$ | AND con $C\wedge D$ en lugar de $B\wedge D$ (evita duplicar F1') |
-| $F_3'$ | $\big[(B\wedge C)\vee(B\wedge D)\vee(C\wedge D)\big]\oplus\big(B\vee\neg C\big)$ | OR con $B\vee\neg C$ en lugar de $(B\vee C)\wedge\neg D$ (mejora no linealidad y balance) |
-| $F_4'$ | $(B\oplus C\oplus D)\oplus(B\wedge C)$ | Sin cambio |
-
-### 2.4. Tablas de verdad definitivas
-
-| B C D | $F_1$ | $F_2$ | $F_3$ | $F_4$ | $F_1'$ | $F_2'$ | $F_3'$ | $F_4'$ |
-|---|---|---|---|---|---|---|---|---|
-| 0 0 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
-| 0 0 1 | 1 | 1 | 0 | 1 | 1 | 1 | 1 | 1 |
-| 0 1 0 | 0 | 1 | 0 | 1 | 1 | 1 | 0 | 1 |
-| 0 1 1 | 1 | 0 | 1 | 0 | 0 | 1 | 1 | 0 |
-| 1 0 0 | 0 | 1 | 0 | 1 | 1 | 1 | 1 | 1 |
-| 1 0 1 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
-| 1 1 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
-| 1 1 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-
-### 2.5. Resultado de las comprobaciones de las funciones definitivas
-
-| Función | Unos / ceros | Depende de B, C, D | ANF | Grado | No linealidad |
-|---|---|---|---|---|---|
-| $F_1'$ | 4 / 4 | Sí | $B\oplus C\oplus D\oplus BD$ | 2 | 2 |
-| $F_2'$ | 4 / 4 | Sí | $B\oplus C\oplus D\oplus CD$ | 2 | 2 |
-| $F_3'$ | 4 / 4 | Sí | $1\oplus C\oplus CD\oplus BD$ | 2 | 2 |
-| $F_4'$ | 4 / 4 | Sí | $B\oplus C\oplus D\oplus BC$ | 2 | 2 |
-
-- **Dependencia:** cada función cambia de valor al invertir cualquiera de B, C o D en alguna fila; ninguna se simplifica a una expresión que ignore una variable.
-- **Incorporan no linealidad:** las cuatro tienen un monomio de grado 2 (no linealidad 2, el máximo para 3 variables).
-- **Balance:** todas tienen 4 unos de 8, sin sesgo de salida con entradas uniformes. Un efecto lateral: $F_2$ y $F_4$ base eran lineales (grado 1, no linealidad 0) y ahora ya no lo son.
-- **Distintas entre sí:** ningún par es idéntico ni complementario.
-- **Observación:** $F_1'$ se simplifica a $B\oplus C\oplus D\oplus BD$: es una función de paridad más un solo término cuadrático. Sigue cumpliendo los criterios, pero conviene saberlo.
-- **Verificación en el código:** se evaluó `funcion_f()` bit a bit en las rondas 0, 19, 20, 39, 40, 59, 60 y 79 y la tabla coincide con la de arriba; además, 20 000 tripletas aleatorias de 32 bits coinciden con una implementación independiente.
+Nota: aquí $W_{14}=0$, así que el AND da 0 y $W_{16}$ es igual a la expansión original. Con la **primera versión** habría salido `00000080` (casi vacío). En cambio, para $t=17$: $\mathrm{ROTL}^1(X)=\texttt{40DAEADC}$ y $W_{16}\wedge W_{15}=\texttt{00000040}$, por lo que $W_{17}=\texttt{40DAEA9C}$: el AND sí modifica el resultado, sin borrar nada.
 
 ---
 
-## 3. Conceptos que no deben confundirse
+## 4. Las cuatro funciones booleanas
 
-| Concepto | Definición | Dónde se aplica aquí |
+### 4.1. Idea general
+
+$F$ recibe tres registros $B,C,D$ y mezcla sus bits columna por columna. Cada grupo de 20 rondas usa una distinta. En las cuatro se hizo lo mismo: **función original $\oplus$ un término no lineal (AND u OR)**.
+
+### 4.2. Cómo se comprobó que cada una está bien
+
+Como $F$ actúa columna por columna, basta estudiarla con 3 bits ($2^3=8$ combinaciones). Se revisó:
+
+1. **Tabla de verdad** (las 8 combinaciones).
+2. **Dependencia:** que cambie al voltear $B$, o $C$, o $D$ (si no, la variable "sobra").
+3. **Simplificación (ANF):** el polinomio en $GF(2)$, para ver si la fórmula se reduce a algo trivial.
+4. **No linealidad:** qué tan lejos está la función de una lineal (máximo posible con 3 variables: 2).
+5. **Balance:** cuántos unos da de 8 (lo ideal es 4: sin preferencia por 0 o 1).
+6. **Que no sea igual** a otra de las cuatro ni a su complemento.
+
+### 4.3. Fórmulas y resultados
+
+| Función | Fórmula definitiva | Forma simplificada (ANF) | Unos de 8 | No linealidad |
+|---|---|---|---|---|
+| $F_1'$ (rondas 0–19) | $[(B\wedge C)\vee(\neg B\wedge D)]\oplus(B\vee C)$ | $B\oplus C\oplus D\oplus BD$ | 4 | 2 |
+| $F_2'$ (rondas 20–39) | $(B\oplus C\oplus D)\oplus(C\wedge D)$ | $B\oplus C\oplus D\oplus CD$ | 4 | 2 |
+| $F_3'$ (rondas 40–59) | $[(B\wedge C)\vee(B\wedge D)\vee(C\wedge D)]\oplus(B\vee\neg C)$ | $1\oplus C\oplus CD\oplus BD$ | 4 | 2 |
+| $F_4'$ (rondas 60–79) | $(B\oplus C\oplus D)\oplus(B\wedge C)$ | $B\oplus C\oplus D\oplus BC$ | 4 | 2 |
+
+Tablas de verdad (orden $BCD=000,001,\dots,111$):
+
+| B C D | $F_1'$ | $F_2'$ | $F_3'$ | $F_4'$ |
+|---|---|---|---|---|
+| 0 0 0 | 0 | 0 | 1 | 0 |
+| 0 0 1 | 1 | 1 | 1 | 1 |
+| 0 1 0 | 1 | 1 | 0 | 1 |
+| 0 1 1 | 0 | 1 | 1 | 0 |
+| 1 0 0 | 1 | 1 | 1 | 1 |
+| 1 0 1 | 1 | 0 | 0 | 0 |
+| 1 1 0 | 0 | 0 | 0 | 1 |
+| 1 1 1 | 0 | 0 | 0 | 0 |
+
+Las cuatro dependen de $B$, $C$ y $D$, están balanceadas (4 unos y 4 ceros), tienen no linealidad 2 y ninguna es igual a otra ni a su complemento.
+
+### 4.4. Qué hace cada una (función original → término extra)
+
+**$F_1$: Choose.** Original: "si $B$ es 1 elige $C$, si no elige $D$", es decir $(B\wedge C)\vee(\neg B\wedge D)$.
+Término extra: $\oplus(B\vee C)$. Cambia el resultado en las columnas donde $B$ o $C$ valen 1. Su forma simplificada, $B\oplus C\oplus D\oplus BD$, es suma de las tres variables más **un** producto ($BD$): ese producto es la no linealidad.
+
+**$F_2$: Paridad.** Original: $B\oplus C\oplus D$, que es **lineal** (no hay ningún producto).
+Término extra: $\oplus(C\wedge D)$. Voltea la salida cuando $C$ y $D$ valen 1 a la vez. Ahora aparece el producto $CD$: la función dejó de ser lineal.
+
+**$F_3$: Mayoría.** Original: da el valor que más se repite entre $B,C,D$.
+Término extra: $\oplus(B\vee\neg C)$. Voltea la salida cuando $B$ es 1 o $C$ es 0. El resultado sigue dependiendo de las tres variables y queda balanceado.
+
+**$F_4$: Paridad.** Original: $B\oplus C\oplus D$ (lineal).
+Término extra: $\oplus(B\wedge C)$. Voltea la salida cuando $B$ y $C$ valen 1 a la vez. Aparece el producto $BC$.
+
+### 4.5. Dos candidatas se corrigieron
+
+Al comprobar las fórmulas propuestas inicialmente, se detectaron dos problemas:
+
+| Candidata original | Problema | Corrección |
 |---|---|---|
-| **No linealidad booleana** | Distancia a la función afín más cercana; ausencia de grado 1 en la ANF | Presencia de monomios $BD$, $CD$, $BC$ en F1'–F4' y del AND en la expansión |
-| **Equilibrio (balance)** | Una función de $n$ variables está balanceada si da 1 en exactamente $2^{n-1}$ entradas | Las cuatro F' dan 4 de 8 |
-| **Pérdida de información / no invertibilidad** | La función no es inyectiva: dos entradas distintas dan la misma salida | Un AND aislado no es inyectivo; el filtro $X\wedge W_{t-1}$ propagaba esa pérdida |
-| **Seguridad criptográfica** | Resistencia demostrable o contrastada a ataques de colisión, preimagen, diferenciales, etc. | **No evaluada ni afirmada** |
+| $F_2'=(B\oplus C\oplus D)\oplus(B\wedge D)$ | Daba **la misma tabla** (`01101100`) que $F_1'$: dos bloques usarían la misma función | Se cambió a $\oplus(C\wedge D)$ |
+| $F_3'=\text{Maj}\oplus[(B\vee C)\wedge\neg D]$ | No linealidad 1 (casi lineal) y 5 unos de 8 (sesgada) | Se cambió a $\oplus(B\vee\neg C)$ |
 
-Que un AND u OR sea no lineal y no inyectivo **no implica** que la construcción completa sea irreversible. En las rondas:
+En ambas se conservó la función base y la idea (término AND/OR combinado por XOR).
 
-$$(A,B,C,D,E)\mapsto(TEMP,\;A,\;\mathrm{ROTL}^{30}(B),\;C,\;D)$$
+---
 
-dado el nuevo estado y los valores de $W_t$ y $K_t$, el estado anterior se recupera así: $A=B_{\text{nuevo}}$, $B=\mathrm{ROTL}^{2}(C_{\text{nuevo}})$, $C=D_{\text{nuevo}}$, $D=E_{\text{nuevo}}$, y
+## 5. Efecto sobre las 80 rondas
+
+Cada ronda hace:
+
+$$TEMP=\mathrm{ROTL}^5(A)+F(B,C,D)+E+W_t+K_t,\qquad (A,B,C,D,E)\leftarrow(TEMP,\;A,\;\mathrm{ROTL}^{30}(B),\;C,\;D)$$
+
+- **Qué entra de $F$ y de $W$:** $F$ aporta una mezcla no lineal de $B,C,D$; $W_t$ aporta información del mensaje. Ambas se suman a $TEMP$.
+- **La suma módulo $2^{32}$** es la parte que "arrastra" acarreos de una columna a la siguiente; no se modificó.
+- **Los registros se desplazan** ($A\to B\to C\to D\to E$), así que lo que calcula $F$ en una ronda llega, rondas después, a todos los registros.
+- **El cambio total** es que ahora $F$ es no lineal en los cuatro bloques (antes $F_2$ y $F_4$ eran lineales) y $W_t$ tiene un término no lineal.
+
+---
+
+## 6. Cuatro conceptos que no son lo mismo
+
+| Concepto | Significa | En este proyecto |
+|---|---|---|
+| **No linealidad** | Aparecen productos de bits (no solo sumas) | Los términos $BD,CD,BC$ y el AND de la expansión |
+| **Balance** | Da 1 en la mitad exacta de las combinaciones | Las cuatro $F'$ dan 4 de 8 |
+| **Pérdida de información** | Dos entradas distintas dan la misma salida | Un AND aislado sí pierde; la primera expansión también |
+| **Seguridad criptográfica** | Resistencia comprobada a ataques | **No evaluada** |
+
+**Importante:** que $F$ sea no lineal y pierda información por sí sola **no hace irreversible** la ronda. Dado el estado nuevo, $A$, $B$, $C$ y $D$ anteriores se recuperan directamente (porque los registros solo se desplazan y rotan):
 $$E=TEMP-\mathrm{ROTL}^5(A)-F(B,C,D)-W_t-K_t \pmod{2^{32}}.$$
-Es decir, **cada ronda es una biyección del estado de 160 bits sin importar qué $F$ se use**, porque $B,C,D$ se recuperan antes de evaluar $F$. Por lo tanto, que $F$ sea no lineal y no inyectiva no hace irreversible la ronda. La función de compresión global sí pierde información, pero por la suma final $H+\text{estado}$ (y por el relleno/longitud), igual que SHA-1 estándar. Del mismo modo, la expansión corregida es reversible (sección 1.3).
+Cada ronda es reversible sin importar qué $F$ se use. Lo que hace irreversible al bloque completo es la suma final con los valores iniciales, igual que en SHA-1 estándar.
 
 ---
 
-## 4. Diferencias respecto a SHA-1 estándar
+## 7. Comparación con SHA-1 estándar
 
-| Aspecto | SHA-1 estándar | SHA-1 Personalizado (corregido) |
+| Aspecto | SHA-1 estándar | SHA-1 Personalizado |
 |---|---|---|
-| Expansión | $\mathrm{ROTL}^1(W_{t-3}\oplus W_{t-8}\oplus W_{t-14}\oplus W_{t-16})$ | $\mathrm{ROTL}^1(X)\oplus(W_{t-1}\wedge W_{t-2})$ |
-| Palabras previas de las que depende $W_t$ | 4 | 6 ($t-1,t-2,t-3,t-8,t-14,t-16$) |
-| Linealidad de la expansión | Lineal sobre GF(2) | No lineal (término de grado 2) |
-| F1 / F2 / F3 / F4 | Ch, Parity, Maj, Parity | F1'–F4' (sección 2.3) |
-| Linealidad de F2 y F4 | Lineales (grado 1) | No lineales (grado 2) |
+| Expansión | $\mathrm{ROTL}^1(X)$ | $\mathrm{ROTL}^1(X)\oplus(W_{t-1}\wedge W_{t-2})$ |
+| Linealidad de la expansión | Lineal | No lineal |
+| Palabras previas usadas | 4 | 6 |
+| $F_2$ y $F_4$ | Lineales | No lineales |
 | Rondas | 4 × 20 | 4 × 20 |
-| Constantes, valores iniciales, actualización de registros | Estándar | Iguales |
+| Constantes, registros, suma de $TEMP$ | Estándar | Iguales |
 | Resultado | 160 bits | 160 bits (40 hex) |
 
 ---
 
-## 5. Limitaciones criptográficas
+## 8. Limitaciones y conclusión
 
-- No se realizaron análisis diferencial, lineal, de colisiones ni de preimágenes. Sin ellos **no se puede afirmar** que la variante sea más segura, ni que sea más débil que SHA-1.
-- Más operaciones por palabra o por ronda no equivalen a más seguridad. Añadir términos puede introducir debilidades (como el colapso de la versión anterior o la dependencia perdida de $C$ en la primera versión de $F_3'$).
-- Un solo experimento de avalancha (cambio de un carácter, 50 pares de mensajes) dio una diferencia media de 80.26 de 160 bits (≈ 50 %). Es una medida descriptiva; no sustituye un análisis criptográfico.
-- SHA-1 estándar está roto en resistencia a colisiones; esta variante tampoco debe usarse en aplicaciones reales.
-- Las propiedades booleanas estudiadas (balance, no linealidad 2 en 3 variables) son locales a cada función $F_i$; la seguridad de una construcción iterada depende de cómo interactúan 80 rondas, la expansión y la suma final.
+- **Más operaciones no significa más seguridad.** Hay más compuertas, pero eso es cantidad de cálculo, no resistencia comprobada.
+- **No se hicieron** análisis diferencial, lineal, de colisiones ni de preimágenes. Sin ellos no se puede decir que la variante sea más segura ni más débil que SHA-1.
+- **Ejemplo de por qué hay que comprobar:** la primera expansión parecía "más compleja" y en realidad colapsaba a ceros; y dos candidatas de $F$ resultaron duplicada y casi lineal.
+- **La avalancha medida** (cambiar un carácter cambia en promedio 80.26 de 160 bits, sobre 50 pares) es solo una observación, no una prueba.
+- **Uso:** variante académica y experimental; no usar en aplicaciones reales.
